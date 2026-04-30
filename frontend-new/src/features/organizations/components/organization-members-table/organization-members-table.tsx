@@ -5,7 +5,6 @@ import {
   useReactTable,
 } from '@tanstack/react-table';
 import { IconDotsVertical, IconTrash } from '@tabler/icons-react';
-import { isAssignableOrganizationMemberRole } from '../../lib/roles';
 import { OrganizationMemberRoleControl } from './organization-member-role-control';
 import { RemoveOrganizationMemberAlertDialog } from './remove-organization-member-alert-dialog';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -29,14 +28,16 @@ import {
 import { Badge } from '@/shared/ui/badge';
 
 type OrganizationMembersTableProps = {
-  canManageMembers: boolean;
+  canChangeMemberRoles: boolean;
+  canRemoveMembers: boolean;
   currentUserId: string;
   members: Array<MemberResponse>;
   organizationId: string;
 };
 
 function OrganizationMembersTable({
-  canManageMembers,
+  canChangeMemberRoles,
+  canRemoveMembers,
   currentUserId,
   members,
   organizationId,
@@ -61,14 +62,14 @@ function OrganizationMembersTable({
         header: 'Role',
         cell: ({ row }) => {
           const member = row.original;
+          const isProtectedMember = isProtectedOrganizationMember({
+            currentUserId,
+            member,
+          });
 
           return (
             <OrganizationMemberRoleControl
-              canChangeRole={canManageMemberRow({
-                canManageMembers,
-                currentUserId,
-                member,
-              })}
+              canChangeRole={canChangeMemberRoles && !isProtectedMember}
               member={member}
             />
           );
@@ -79,14 +80,12 @@ function OrganizationMembersTable({
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => {
           const member = row.original;
+          const isProtectedMember = isProtectedOrganizationMember({
+            currentUserId,
+            member,
+          });
 
-          if (
-            !canManageMemberRow({
-              canManageMembers,
-              currentUserId,
-              member,
-            })
-          ) {
+          if (!canRemoveMembers || isProtectedMember) {
             return null;
           }
 
@@ -99,7 +98,7 @@ function OrganizationMembersTable({
         },
       },
     ],
-    [canManageMembers, currentUserId],
+    [canChangeMemberRoles, canRemoveMembers, currentUserId],
   );
 
   const table = useReactTable({
@@ -217,20 +216,14 @@ function OrganizationMemberActionsMenu({
   );
 }
 
-function canManageMemberRow({
-  canManageMembers,
+function isProtectedOrganizationMember({
   currentUserId,
   member,
 }: {
-  canManageMembers: boolean;
   currentUserId: string;
   member: MemberResponse;
 }) {
-  return (
-    canManageMembers &&
-    member.id !== currentUserId &&
-    isAssignableOrganizationMemberRole(member.role)
-  );
+  return member.id === currentUserId || member.role === 'owner';
 }
 
 function getHeaderCellClassName(columnId: string) {

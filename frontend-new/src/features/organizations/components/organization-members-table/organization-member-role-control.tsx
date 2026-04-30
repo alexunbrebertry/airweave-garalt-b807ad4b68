@@ -1,12 +1,8 @@
 import { toast } from 'sonner';
 import { useChangeOrganizationMemberRoleMutation } from '../../api';
-import {
-  assignableOrganizationMemberRoles,
-  getOrganizationRoleLabel,
-  isAssignableOrganizationMemberRole,
-} from '../../lib/roles';
+import { assignableOrganizationRoles } from '../../lib/assignable-roles';
 import { OrganizationRoleBadge } from '../organization-role-badge';
-import type { AssignableOrganizationMemberRole } from '../../lib/roles';
+import type { AssignableOrganizationRole } from '../../lib/assignable-roles';
 import type { MemberResponse } from '@/shared/api/generated';
 import { useCurrentOrganizationId } from '@/shared/session';
 import {
@@ -29,7 +25,7 @@ function OrganizationMemberRoleControl({
   const changeRoleMutation = useChangeOrganizationMemberRoleMutation();
   const role = member.role;
 
-  const handleRoleChange = (nextRole: AssignableOrganizationMemberRole) => {
+  const handleRoleChange = (nextRole: AssignableOrganizationRole) => {
     if (role === nextRole) {
       return;
     }
@@ -44,15 +40,13 @@ function OrganizationMemberRoleControl({
       },
       {
         onSuccess: () => {
-          toast.success(
-            `${member.name} is now ${getOrganizationRoleLabel(nextRole)}.`,
-          );
+          toast.success(`${member.name} is now ${nextRole}.`);
         },
       },
     );
   };
 
-  if (!canChangeRole || !isAssignableOrganizationMemberRole(role)) {
+  if (!canChangeRole) {
     return <OrganizationRoleBadge role={role} />;
   }
 
@@ -60,7 +54,7 @@ function OrganizationMemberRoleControl({
     <Select
       disabled={changeRoleMutation.isPending}
       value={role}
-      onValueChange={(value: AssignableOrganizationMemberRole) =>
+      onValueChange={(value: AssignableOrganizationRole) =>
         handleRoleChange(value)
       }
     >
@@ -71,9 +65,9 @@ function OrganizationMemberRoleControl({
         <OrganizationRoleBadge role={role} />
       </SelectTrigger>
       <SelectContent align="start">
-        {assignableOrganizationMemberRoles.map((option) => (
-          <SelectItem key={option} value={option}>
-            {getOrganizationRoleLabel(option)}
+        {assignableOrganizationRoles.map((option) => (
+          <SelectItem key={option} value={option} className="capitalize">
+            {option}
           </SelectItem>
         ))}
       </SelectContent>

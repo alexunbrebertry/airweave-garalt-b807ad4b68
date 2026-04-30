@@ -5,7 +5,9 @@ export {
   parseApiErrorWithDetail,
 } from './errors';
 export { invalidateQueriesByTags } from './invalidate-queries-by-tags';
+export { isOrganizationRole, organizationRoles } from './organization-role';
 export { QueryClientProvider, queryClient } from './query-client';
+export type { OrganizationRole } from './organization-role';
 export type { OrganizationScope } from './organization-scope';
 export * from './streams';
 export { withOrganizationHeaders } from './with-organization-headers';

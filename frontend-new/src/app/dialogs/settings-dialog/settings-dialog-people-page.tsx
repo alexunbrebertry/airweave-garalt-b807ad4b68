@@ -5,7 +5,7 @@ import { SettingsDialogLayout } from './settings-dialog-layout';
 import {
   InviteOrganizationMemberDialog,
   OrganizationMembersTable,
-  canManageOrganizationMembers,
+  hasOrganizationPermission,
   useOrganizationMembersQueryOptions,
 } from '@/features/organizations';
 import { ErrorState } from '@/shared/components/error-state';
@@ -27,8 +27,17 @@ function SettingsDialogPeoplePage({ onClose }: SettingsDialogPeoplePageProps) {
     error,
     refetch,
   } = useQuery(organizationMembersQueryOptions);
-  const canManageMembers = canManageOrganizationMembers(
+  const canInviteMembers = hasOrganizationPermission(
     currentOrganization.role,
+    'members.invite',
+  );
+  const canChangeMemberRoles = hasOrganizationPermission(
+    currentOrganization.role,
+    'members.changeRole',
+  );
+  const canRemoveMembers = hasOrganizationPermission(
+    currentOrganization.role,
+    'members.remove',
   );
 
   const body = error ? (
@@ -44,7 +53,8 @@ function SettingsDialogPeoplePage({ onClose }: SettingsDialogPeoplePageProps) {
     <LoadingState title="Loading members..." />
   ) : (
     <OrganizationMembersTable
-      canManageMembers={canManageMembers}
+      canChangeMemberRoles={canChangeMemberRoles}
+      canRemoveMembers={canRemoveMembers}
       currentUserId={viewer.id}
       members={members}
       organizationId={currentOrganization.id}
@@ -66,7 +76,7 @@ function SettingsDialogPeoplePage({ onClose }: SettingsDialogPeoplePageProps) {
               {memberCount} {pluralize(memberCount, 'Member')}
             </span>
           </div>
-          {canManageMembers ? (
+          {canInviteMembers ? (
             <Button
               size="lg"
               onClick={() => setInviteDialogOpen(true)}

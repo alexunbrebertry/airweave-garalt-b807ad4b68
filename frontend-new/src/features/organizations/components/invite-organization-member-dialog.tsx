@@ -3,11 +3,8 @@ import { useForm } from '@tanstack/react-form';
 import { toast } from 'sonner';
 import * as z from 'zod';
 import { useInviteOrganizationMemberMutation } from '../api';
-import {
-  assignableOrganizationMemberRoles,
-  getOrganizationRoleLabel,
-} from '../lib/roles';
-import type { AssignableOrganizationMemberRole } from '../lib/roles';
+import { assignableOrganizationRoles } from '../lib/assignable-roles';
+import type { AssignableOrganizationRole } from '../lib/assignable-roles';
 import { Button } from '@/shared/ui/button';
 import {
   Dialog,
@@ -30,7 +27,7 @@ import {
 
 const defaultFormValues = {
   email: '',
-  role: 'member' as AssignableOrganizationMemberRole,
+  role: 'member' as AssignableOrganizationRole,
 };
 
 const roleOptions = [
@@ -44,7 +41,7 @@ const roleOptions = [
       'They have the ability to update the organization and manage its members and roles. However, please note that they cannot delete the organization.',
   },
 ] satisfies Array<{
-  role: AssignableOrganizationMemberRole;
+  role: AssignableOrganizationRole;
   description: string;
 }>;
 
@@ -76,7 +73,7 @@ function InviteOrganizationMemberDialog({
             (value) => !existingMemberEmailSet.has(value.toLowerCase()),
             'This person is already a member.',
           ),
-        role: z.enum(assignableOrganizationMemberRoles),
+        role: z.enum(assignableOrganizationRoles),
       }),
     [existingMemberEmailSet],
   );
@@ -160,9 +157,7 @@ function InviteOrganizationMemberDialog({
                 <Select
                   disabled={inviteMemberMutation.isPending}
                   onValueChange={(value) =>
-                    field.handleChange(
-                      value as AssignableOrganizationMemberRole,
-                    )
+                    field.handleChange(value as AssignableOrganizationRole)
                   }
                   value={field.state.value}
                 >
@@ -221,14 +216,12 @@ function RoleOptionContent({
   role,
   description,
 }: {
-  role: AssignableOrganizationMemberRole;
+  role: AssignableOrganizationRole;
   description: string;
 }) {
   return (
     <div className="flex flex-col gap-0.5 text-left whitespace-normal">
-      <span className="font-medium text-foreground">
-        {getOrganizationRoleLabel(role)}
-      </span>
+      <span className="font-medium text-foreground capitalize">{role}</span>
       <span className="line-clamp-2 text-muted-foreground">{description}</span>
     </div>
   );

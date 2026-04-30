@@ -22,10 +22,10 @@ export {
   useRemoveOrganizationMemberMutation,
   useRemoveOrganizationMemberMutationOptions,
 } from './api';
-export { canManageOrganizationMembers } from './lib/permissions';
 export {
-  assignableOrganizationMemberRoles,
-  getOrganizationRoleLabel,
-  isAssignableOrganizationMemberRole,
-} from './lib/roles';
-export type { AssignableOrganizationMemberRole } from './lib/roles';
+  hasOrganizationPermission,
+  organizationPermissions,
+} from './lib/access-control';
+export { assignableOrganizationRoles } from './lib/assignable-roles';
+export type { OrganizationPermission } from './lib/access-control';
+export type { AssignableOrganizationRole } from './lib/assignable-roles';
