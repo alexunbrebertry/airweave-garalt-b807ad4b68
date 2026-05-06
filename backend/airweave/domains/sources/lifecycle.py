@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from airweave.domains.sources.token_providers.protocol import SourceAuthProvider
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
@@ -732,11 +732,40 @@ class SourceLifecycleService(SourceLifecycleServiceProtocol):
         entry: SourceRegistryEntry,
         config_fields: Dict[str, Any],
     ) -> BaseModel:
-        """Parse raw config_fields dict into the source's typed config class."""
+        """Parse raw config_fields dict into the source's typed config class.
+
+        Translates Pydantic ``ValidationError`` into ``SourceValidationError``
+        so the failure surfaces as a USER_CONFIG fault with a source-aware
+        message (e.g., "github connection requires repo_name") instead of
+        leaking Pydantic's terse "1 validation error for X field required"
+        through the activity boundary.
+        """
         from airweave.platform.configs.config import SourceConfig
 
         config_class = entry.config_ref or SourceConfig
-        return config_class.model_validate(config_fields or {})
+        try:
+            return config_class.model_validate(config_fields or {})
+        except ValidationError as e:
+            missing = [
+                ".".join(str(part) for part in err.get("loc", ()))
+                for err in e.errors()
+                if err.get("type") == "missing"
+            ]
+            if missing:
+                fields = ", ".join(missing)
+                reason = f"connection is missing required configuration: {fields}"
+            else:
+                reason = (
+                    "connection configuration is invalid: "
+                    + "; ".join(
+                        f"{'.'.join(str(p) for p in err.get('loc', ()))}: {err.get('msg')}"
+                        for err in e.errors()
+                    )
+                )
+            raise SourceValidationError(
+                short_name=entry.short_name,
+                reason=reason,
+            ) from e
 
     # ------------------------------------------------------------------
     # Private: config field helpers

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from pydantic import BaseModel
 
 from airweave.core.exceptions import NotFoundException
 from airweave.domains.auth_provider.fake import FakeAuthProviderRegistry
@@ -1068,3 +1069,71 @@ async def test_create_does_not_wrap_token_provider_server_error():
 
     with pytest.raises(TokenProviderServerError):
         await service.create(db=MagicMock(), source_connection_id=sc_id, ctx=_make_ctx())
+
+
+# ===========================================================================
+# _build_typed_config() — translates Pydantic ValidationError to SourceValidationError
+# ===========================================================================
+
+
+class _ConfigWithRequired(BaseModel):
+    """Stub config with one required field for testing typed-config errors."""
+
+    repo_name: str
+    branch: str = ""
+
+
+def test_build_typed_config_translates_missing_field_to_source_validation_error():
+    """Pydantic 'field required' becomes a clear SourceValidationError."""
+    entry = _entry_with_class("github", _StubSourceValid)
+    object.__setattr__(entry, "config_ref", _ConfigWithRequired)
+
+    service = _make_service(source_entries=[entry])
+
+    with pytest.raises(SourceValidationError) as exc_info:
+        service._build_typed_config(entry, {})
+
+    assert exc_info.value.short_name == "github"
+    assert "missing required configuration: repo_name" in exc_info.value.reason
+
+
+def test_build_typed_config_translates_validation_failure_to_source_validation_error():
+    """Pattern / type errors also translate, with the underlying message preserved."""
+
+    class _Strict(BaseModel):
+        repo_name: str
+
+    entry = _entry_with_class("github", _StubSourceValid)
+    object.__setattr__(entry, "config_ref", _Strict)
+
+    service = _make_service(source_entries=[entry])
+
+    with pytest.raises(SourceValidationError) as exc_info:
+        service._build_typed_config(entry, {"repo_name": 123})  # wrong type
+
+    assert exc_info.value.short_name == "github"
+    assert "configuration is invalid" in exc_info.value.reason
+    assert "repo_name" in exc_info.value.reason
+
+
+def test_build_typed_config_happy_path_returns_validated_model():
+    entry = _entry_with_class("github", _StubSourceValid)
+    object.__setattr__(entry, "config_ref", _ConfigWithRequired)
+
+    service = _make_service(source_entries=[entry])
+    result = service._build_typed_config(entry, {"repo_name": "owner/repo"})
+
+    assert isinstance(result, _ConfigWithRequired)
+    assert result.repo_name == "owner/repo"
+
+
+def test_build_typed_config_falls_back_to_source_config_when_no_config_ref():
+    """Sources without a config_ref get the empty SourceConfig schema (anything goes)."""
+    entry = _entry_with_class("noconfig", _StubSourceValid)
+    object.__setattr__(entry, "config_ref", None)
+
+    service = _make_service(source_entries=[entry])
+    result = service._build_typed_config(entry, {})
+
+    # SourceConfig has no required fields, so this should not raise.
+    assert isinstance(result, BaseModel)
