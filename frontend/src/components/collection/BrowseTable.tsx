@@ -1,8 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+    Check,
+    ChevronLeft,
+    ChevronRight,
+    Copy,
+    Download,
+    ExternalLink,
+    Loader2,
+    Search as SearchIcon,
+    X,
+} from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
     Table,
@@ -26,6 +37,15 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getAppIconUrl } from "@/lib/utils/icons";
 import { useTheme } from "@/lib/theme-provider";
@@ -68,6 +88,23 @@ interface BrowseResponse {
     offset: number;
 }
 
+interface FilterCondition {
+    field: string;
+    operator: string;
+    value: string | number | boolean | string[] | number[];
+}
+
+interface FilterGroup {
+    conditions: FilterCondition[];
+}
+
+interface BrowseRequestBody {
+    limit: number;
+    offset: number;
+    sync_ids?: string[];
+    filter?: FilterGroup[];
+}
+
 interface BrowseTableProps {
     collectionReadableId: string;
     sourceConnections: Array<{
@@ -79,6 +116,8 @@ interface BrowseTableProps {
 }
 
 const PAGE_SIZE = 50;
+const SEARCH_DEBOUNCE_MS = 250;
+const EXPORT_MAX_ROWS = 1000;
 
 const ALL_SOURCES_VALUE = "__all__";
 
@@ -88,6 +127,69 @@ const formatTimestamp = (value: string | null | undefined): string => {
     if (Number.isNaN(date.getTime())) return value;
     return date.toLocaleString();
 };
+
+const buildBrowseBody = (
+    limit: number,
+    offset: number,
+    selectedSyncId: string,
+    nameQuery: string,
+): BrowseRequestBody => {
+    const body: BrowseRequestBody = { limit, offset };
+    if (selectedSyncId !== ALL_SOURCES_VALUE) {
+        body.sync_ids = [selectedSyncId];
+    }
+    const trimmed = nameQuery.trim();
+    if (trimmed) {
+        body.filter = [
+            {
+                conditions: [{ field: "name", operator: "contains", value: trimmed }],
+            },
+        ];
+    }
+    return body;
+};
+
+// ===== CSV / JSON helpers =====
+
+const CSV_COLUMNS: Array<{ header: string; pick: (r: BrowseRow) => unknown }> = [
+    { header: "entity_id", pick: (r) => r.entity_id },
+    { header: "name", pick: (r) => r.name ?? "" },
+    { header: "entity_type", pick: (r) => r.airweave_system_metadata?.entity_type ?? "" },
+    { header: "source_name", pick: (r) => r.airweave_system_metadata?.source_name ?? "" },
+    { header: "sync_id", pick: (r) => r.airweave_system_metadata?.sync_id ?? "" },
+    { header: "created_at", pick: (r) => r.created_at ?? "" },
+    { header: "updated_at", pick: (r) => r.updated_at ?? "" },
+    { header: "web_url", pick: (r) => r.web_url ?? "" },
+];
+
+const escapeCsv = (value: unknown): string => {
+    if (value === null || value === undefined) return "";
+    const s = typeof value === "string" ? value : JSON.stringify(value);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+};
+
+const rowsToCsv = (rows: BrowseRow[]): string => {
+    const head = CSV_COLUMNS.map((c) => c.header).join(",");
+    const body = rows
+        .map((r) => CSV_COLUMNS.map((c) => escapeCsv(c.pick(r))).join(","))
+        .join("\n");
+    return `${head}\n${body}\n`;
+};
+
+const triggerDownload = (filename: string, mime: string, content: string) => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+};
+
+// ===== Component =====
 
 export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseTableProps) {
     const { resolvedTheme } = useTheme();
@@ -99,6 +201,58 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
     const [selectedSyncId, setSelectedSyncId] = useState<string>(ALL_SOURCES_VALUE);
     const [activeRow, setActiveRow] = useState<BrowseRow | null>(null);
 
+    // Reactive search bar
+    const [searchInput, setSearchInput] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
+
+    // Export state
+    const [isExporting, setIsExporting] = useState(false);
+
+    // Reset offset when filters change
+    useEffect(() => {
+        setOffset(0);
+    }, [selectedSyncId, debouncedSearch]);
+
+    // Debounce search input
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchInput), SEARCH_DEBOUNCE_MS);
+        return () => clearTimeout(t);
+    }, [searchInput]);
+
+    // Fetch page (abortable)
+    useEffect(() => {
+        const controller = new AbortController();
+        const run = async () => {
+            setIsLoading(true);
+            setError(null);
+            try {
+                const body = buildBrowseBody(PAGE_SIZE, offset, selectedSyncId, debouncedSearch);
+                const response = await apiClient.post(
+                    `/collections/${collectionReadableId}/browse`,
+                    body,
+                    { signal: controller.signal },
+                );
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `Browse failed (${response.status})`);
+                }
+                const data: BrowseResponse = await response.json();
+                if (!controller.signal.aborted) {
+                    setRows(data.results);
+                    setTotal(data.total);
+                }
+            } catch (e) {
+                if (controller.signal.aborted) return;
+                if (e instanceof Error && e.name === "AbortError") return;
+                setError(e instanceof Error ? e.message : "Failed to load");
+            } finally {
+                if (!controller.signal.aborted) setIsLoading(false);
+            }
+        };
+        void run();
+        return () => controller.abort();
+    }, [collectionReadableId, offset, selectedSyncId, debouncedSearch]);
+
     // sync_id → SourceConnection lookup
     const syncToConnection = useMemo(() => {
         const map = new Map<string, BrowseTableProps["sourceConnections"][number]>();
@@ -108,64 +262,75 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
         return map;
     }, [sourceConnections]);
 
-    // Reset pagination when filter changes
-    useEffect(() => {
-        setOffset(0);
-    }, [selectedSyncId]);
-
-    useEffect(() => {
-        let cancelled = false;
-        const run = async () => {
-            setIsLoading(true);
-            setError(null);
-            try {
-                const body: Record<string, unknown> = {
-                    limit: PAGE_SIZE,
-                    offset,
-                };
-                if (selectedSyncId !== ALL_SOURCES_VALUE) {
-                    body.sync_ids = [selectedSyncId];
-                }
-
-                const response = await apiClient.post(
-                    `/collections/${collectionReadableId}/browse`,
-                    body
-                );
-                if (!response.ok) {
-                    const text = await response.text();
-                    throw new Error(text || `Browse failed (${response.status})`);
-                }
-                const data: BrowseResponse = await response.json();
-                if (!cancelled) {
-                    setRows(data.results);
-                    setTotal(data.total);
-                }
-            } catch (e) {
-                if (!cancelled) {
-                    setError(e instanceof Error ? e.message : "Failed to load");
-                }
-            } finally {
-                if (!cancelled) setIsLoading(false);
-            }
-        };
-        run();
-        return () => {
-            cancelled = true;
-        };
-    }, [collectionReadableId, offset, selectedSyncId]);
-
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
     const canPrev = offset > 0;
     const canNext = offset + PAGE_SIZE < total;
 
+    const filteringApplied =
+        selectedSyncId !== ALL_SOURCES_VALUE || debouncedSearch.trim().length > 0;
+
+    // ===== Export =====
+
+    const fetchAllForExport = useCallback(async (): Promise<BrowseRow[]> => {
+        const cap = Math.min(total, EXPORT_MAX_ROWS);
+        const body = buildBrowseBody(cap, 0, selectedSyncId, debouncedSearch);
+        const response = await apiClient.post(
+            `/collections/${collectionReadableId}/browse`,
+            body,
+        );
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `Export failed (${response.status})`);
+        }
+        const data: BrowseResponse = await response.json();
+        return data.results;
+    }, [collectionReadableId, selectedSyncId, debouncedSearch, total]);
+
+    const runExport = useCallback(
+        async (scope: "page" | "all", format: "csv" | "json") => {
+            setIsExporting(true);
+            try {
+                const data = scope === "page" ? rows : await fetchAllForExport();
+                const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+                const base = `${collectionReadableId}-browse-${stamp}`;
+                if (format === "csv") {
+                    triggerDownload(`${base}.csv`, "text/csv;charset=utf-8", rowsToCsv(data));
+                } else {
+                    triggerDownload(
+                        `${base}.json`,
+                        "application/json;charset=utf-8",
+                        JSON.stringify(data, null, 2),
+                    );
+                }
+                if (scope === "all" && total > EXPORT_MAX_ROWS) {
+                    toast.warning(
+                        `Exported first ${EXPORT_MAX_ROWS.toLocaleString()} of ${total.toLocaleString()} rows. Narrow the filter to capture more.`,
+                    );
+                } else {
+                    toast.success(`Exported ${data.length.toLocaleString()} rows`);
+                }
+            } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Export failed");
+            } finally {
+                setIsExporting(false);
+            }
+        },
+        [collectionReadableId, rows, fetchAllForExport, total],
+    );
+
     return (
         <div className="w-full">
             {/* Toolbar */}
-            <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <SearchInput
+                        value={searchInput}
+                        onChange={setSearchInput}
+                        isPending={searchInput !== debouncedSearch || (isLoading && !!debouncedSearch)}
+                    />
                     <Select value={selectedSyncId} onValueChange={setSelectedSyncId}>
-                        <SelectTrigger className="h-8 w-[220px]">
+                        <SelectTrigger className="h-9 w-[200px] shrink-0">
                             <SelectValue placeholder="All sources" />
                         </SelectTrigger>
                         <SelectContent>
@@ -179,31 +344,74 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
                                 ))}
                         </SelectContent>
                     </Select>
-                    {isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                    {total > 0 ? (
-                        <>
-                            {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
-                        </>
-                    ) : isLoading ? (
-                        <span>Loading…</span>
-                    ) : (
-                        <span>0 results</span>
-                    )}
+
+                <div className="flex items-center gap-2">
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                        {total > 0 ? (
+                            <>
+                                {(offset + 1).toLocaleString()}–
+                                {Math.min(offset + PAGE_SIZE, total).toLocaleString()} of{" "}
+                                {total.toLocaleString()}
+                            </>
+                        ) : isLoading ? (
+                            <span>Loading…</span>
+                        ) : (
+                            <span>0 results</span>
+                        )}
+                    </div>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-9"
+                                disabled={isExporting || total === 0}
+                            >
+                                {isExporting ? (
+                                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                ) : (
+                                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                                )}
+                                Export
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground">
+                                Current page ({rows.length.toLocaleString()})
+                            </DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => runExport("page", "csv")}>
+                                Export page as CSV
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => runExport("page", "json")}>
+                                Export page as JSON
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel className="text-xs text-muted-foreground">
+                                {filteringApplied ? "All matching" : "Entire collection"} (max{" "}
+                                {EXPORT_MAX_ROWS.toLocaleString()})
+                            </DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => runExport("all", "csv")}>
+                                Export all as CSV
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => runExport("all", "json")}>
+                                Export all as JSON
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
             </div>
 
             {/* Table */}
-            <div className="rounded-md border">
+            <div className="rounded-md border bg-card">
                 <Table>
                     <TableHeader>
-                        <TableRow>
-                            <TableHead className="w-[40%]">Name</TableHead>
-                            <TableHead>Type</TableHead>
-                            <TableHead>Source</TableHead>
-                            <TableHead>Updated</TableHead>
-                            <TableHead className="text-right">Open</TableHead>
+                        <TableRow className="hover:bg-transparent">
+                            <TableHead className="w-[44%]">Name</TableHead>
+                            <TableHead className="w-[18%]">Type</TableHead>
+                            <TableHead className="w-[18%]">Source</TableHead>
+                            <TableHead className="w-[16%]">Updated</TableHead>
+                            <TableHead className="w-[4%] text-right" />
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -218,54 +426,69 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
                                 </TableRow>
                             ))
                         ) : rows.length === 0 ? (
-                            <TableRow>
-                                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
-                                    {error ? `Error: ${error}` : "No entities to browse yet."}
+                            <TableRow className="hover:bg-transparent">
+                                <TableCell
+                                    colSpan={5}
+                                    className="h-32 text-center text-sm text-muted-foreground"
+                                >
+                                    {error
+                                        ? `Error: ${error}`
+                                        : filteringApplied
+                                          ? "No entities match these filters."
+                                          : "No entities to browse yet."}
                                 </TableCell>
                             </TableRow>
                         ) : (
                             rows.map((row) => {
                                 const meta = row.airweave_system_metadata ?? {};
-                                const conn = meta.sync_id ? syncToConnection.get(meta.sync_id) : undefined;
+                                const conn = meta.sync_id
+                                    ? syncToConnection.get(meta.sync_id)
+                                    : undefined;
                                 const sourceLabel = conn?.name ?? meta.source_name ?? "—";
                                 const shortName = conn?.short_name ?? meta.source_name;
                                 return (
                                     <TableRow
                                         key={row.entity_id}
-                                        className="cursor-pointer"
+                                        className="cursor-pointer group"
                                         onClick={() => setActiveRow(row)}
                                     >
-                                        <TableCell className="font-medium">
-                                            <div className="truncate max-w-[480px]" title={row.name ?? row.entity_id}>
+                                        <TableCell className="font-medium align-top">
+                                            <div
+                                                className="truncate max-w-[520px]"
+                                                title={row.name ?? row.entity_id}
+                                            >
                                                 {row.name || row.entity_id}
                                             </div>
                                             {row.textual_representation && (
-                                                <div className="text-xs text-muted-foreground truncate max-w-[480px]">
+                                                <div className="text-xs text-muted-foreground truncate max-w-[520px] mt-0.5">
                                                     {row.textual_representation}
                                                 </div>
                                             )}
                                         </TableCell>
-                                        <TableCell>
-                                            <Badge variant="secondary" className="font-mono text-[10px]">
+                                        <TableCell className="align-top">
+                                            <Badge
+                                                variant="secondary"
+                                                className="font-mono text-[10px] font-normal"
+                                            >
                                                 {meta.entity_type || "—"}
                                             </Badge>
                                         </TableCell>
-                                        <TableCell>
+                                        <TableCell className="align-top">
                                             <div className="flex items-center gap-2">
                                                 {shortName && (
                                                     <img
                                                         src={getAppIconUrl(shortName, resolvedTheme)}
                                                         alt={sourceLabel}
-                                                        className="h-4 w-4 object-contain"
+                                                        className="h-4 w-4 object-contain shrink-0"
                                                     />
                                                 )}
-                                                <span className="text-sm">{sourceLabel}</span>
+                                                <span className="text-sm truncate">{sourceLabel}</span>
                                             </div>
                                         </TableCell>
-                                        <TableCell className="text-sm text-muted-foreground">
+                                        <TableCell className="text-sm text-muted-foreground tabular-nums align-top">
                                             {formatTimestamp(row.updated_at ?? row.created_at)}
                                         </TableCell>
-                                        <TableCell className="text-right">
+                                        <TableCell className="text-right align-top">
                                             {row.web_url ? (
                                                 <a
                                                     href={row.web_url}
@@ -274,14 +497,17 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
                                                     onClick={(e) => e.stopPropagation()}
                                                     className={cn(
                                                         "inline-flex h-7 w-7 items-center justify-center rounded",
-                                                        "text-muted-foreground hover:text-foreground hover:bg-muted"
+                                                        "text-muted-foreground/60 group-hover:text-muted-foreground",
+                                                        "hover:!text-foreground hover:bg-muted",
                                                     )}
                                                     title="Open in source"
                                                 >
                                                     <ExternalLink className="h-3.5 w-3.5" />
                                                 </a>
                                             ) : (
-                                                <span className="text-xs text-muted-foreground">—</span>
+                                                <span className="text-xs text-muted-foreground/40">
+                                                    —
+                                                </span>
                                             )}
                                         </TableCell>
                                     </TableRow>
@@ -294,8 +520,8 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
 
             {/* Pagination */}
             <div className="flex items-center justify-between mt-3">
-                <div className="text-xs text-muted-foreground">
-                    Page {currentPage} of {totalPages}
+                <div className="text-xs text-muted-foreground tabular-nums">
+                    Page {currentPage.toLocaleString()} of {totalPages.toLocaleString()}
                 </div>
                 <div className="flex items-center gap-2">
                     <Button
@@ -319,79 +545,183 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
                 </div>
             </div>
 
-            {/* Row drawer */}
-            <Sheet open={!!activeRow} onOpenChange={(open) => !open && setActiveRow(null)}>
-                <SheetContent className="w-[600px] sm:max-w-[600px] overflow-y-auto">
-                    {activeRow && (
-                        <>
-                            <SheetHeader>
-                                <SheetTitle className="break-words">
-                                    {activeRow.name || activeRow.entity_id}
-                                </SheetTitle>
-                                <SheetDescription className="font-mono text-[11px] break-all">
-                                    {activeRow.entity_id}
-                                </SheetDescription>
-                            </SheetHeader>
-                            <div className="mt-4 space-y-4 text-sm">
-                                <DetailRow
-                                    label="Type"
-                                    value={activeRow.airweave_system_metadata?.entity_type}
-                                />
-                                <DetailRow
-                                    label="Source"
-                                    value={activeRow.airweave_system_metadata?.source_name}
-                                />
-                                <DetailRow label="Created" value={formatTimestamp(activeRow.created_at)} />
-                                <DetailRow label="Updated" value={formatTimestamp(activeRow.updated_at)} />
-                                {activeRow.breadcrumbs && activeRow.breadcrumbs.length > 0 && (
-                                    <div>
-                                        <div className="text-xs font-medium text-muted-foreground mb-1">Breadcrumbs</div>
-                                        <div className="text-xs">
-                                            {activeRow.breadcrumbs.map((b, i) => (
-                                                <span key={i}>
-                                                    {i > 0 && " / "}
-                                                    {b.name || b.entity_id}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                {activeRow.textual_representation && (
-                                    <div>
-                                        <div className="text-xs font-medium text-muted-foreground mb-1">
-                                            Content
-                                        </div>
-                                        <pre className="whitespace-pre-wrap break-words text-xs bg-muted rounded p-3 max-h-[40vh] overflow-auto">
-                                            {activeRow.textual_representation}
-                                        </pre>
-                                    </div>
-                                )}
-                                {activeRow.raw_source_fields &&
-                                    Object.keys(activeRow.raw_source_fields).length > 0 && (
-                                        <div>
-                                            <div className="text-xs font-medium text-muted-foreground mb-1">
-                                                Raw fields
-                                            </div>
-                                            <pre className="whitespace-pre-wrap break-words text-xs bg-muted rounded p-3 max-h-[30vh] overflow-auto">
-                                                {JSON.stringify(activeRow.raw_source_fields, null, 2)}
-                                            </pre>
-                                        </div>
-                                    )}
-                            </div>
-                        </>
-                    )}
-                </SheetContent>
-            </Sheet>
+            <RowDrawer row={activeRow} onClose={() => setActiveRow(null)} />
         </div>
     );
 }
 
-function DetailRow({ label, value }: { label: string; value?: string | null }) {
+// ===== Subcomponents =====
+
+function SearchInput({
+    value,
+    onChange,
+    isPending,
+}: {
+    value: string;
+    onChange: (v: string) => void;
+    isPending: boolean;
+}) {
+    const ref = useRef<HTMLInputElement>(null);
+    return (
+        <div className="relative flex-1 min-w-[180px] max-w-[420px]">
+            <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+                ref={ref}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder="Search by name…"
+                className="h-9 pl-8 pr-8"
+            />
+            {isPending && value && (
+                <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+            {!isPending && value && (
+                <button
+                    type="button"
+                    onClick={() => {
+                        onChange("");
+                        ref.current?.focus();
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                    aria-label="Clear search"
+                >
+                    <X className="h-3 w-3" />
+                </button>
+            )}
+        </div>
+    );
+}
+
+function RowDrawer({ row, onClose }: { row: BrowseRow | null; onClose: () => void }) {
+    const [copied, setCopied] = useState(false);
+    useEffect(() => {
+        if (!row) setCopied(false);
+    }, [row]);
+
+    const onCopy = useCallback((value: string) => {
+        navigator.clipboard.writeText(value).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+        });
+    }, []);
+
+    return (
+        <Sheet open={!!row} onOpenChange={(open) => !open && onClose()}>
+            <SheetContent className="w-[640px] sm:max-w-[640px] p-0 overflow-hidden flex flex-col">
+                {row && (
+                    <>
+                        <SheetHeader className="px-6 pt-6 pb-4 border-b sticky top-0 bg-background z-10">
+                            <SheetTitle className="break-words text-base leading-snug">
+                                {row.name || row.entity_id}
+                            </SheetTitle>
+                            <SheetDescription className="flex items-center gap-2">
+                                <code className="font-mono text-[11px] break-all text-muted-foreground/80 leading-tight">
+                                    {row.entity_id}
+                                </code>
+                                <button
+                                    type="button"
+                                    onClick={() => onCopy(row.entity_id)}
+                                    className="shrink-0 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 hover:text-foreground hover:bg-muted"
+                                    aria-label="Copy entity ID"
+                                >
+                                    {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                                </button>
+                            </SheetDescription>
+                        </SheetHeader>
+                        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 text-sm">
+                            <div className="grid grid-cols-[80px_1fr] gap-y-2 gap-x-4 text-xs">
+                                <DetailRow
+                                    label="Type"
+                                    value={row.airweave_system_metadata?.entity_type}
+                                    mono
+                                />
+                                <DetailRow
+                                    label="Source"
+                                    value={row.airweave_system_metadata?.source_name}
+                                />
+                                <DetailRow label="Created" value={formatTimestamp(row.created_at)} />
+                                <DetailRow label="Updated" value={formatTimestamp(row.updated_at)} />
+                                {row.web_url && (
+                                    <>
+                                        <div className="text-muted-foreground">Link</div>
+                                        <a
+                                            href={row.web_url}
+                                            target="_blank"
+                                            rel="noreferrer noopener"
+                                            className="text-primary hover:underline truncate"
+                                        >
+                                            {row.web_url}
+                                        </a>
+                                    </>
+                                )}
+                            </div>
+
+                            {row.breadcrumbs && row.breadcrumbs.length > 0 && (
+                                <Section label="Breadcrumbs">
+                                    <div className="text-xs flex flex-wrap items-center gap-1">
+                                        {row.breadcrumbs.map((b, i) => (
+                                            <span key={i} className="flex items-center gap-1">
+                                                {i > 0 && (
+                                                    <span className="text-muted-foreground/50">/</span>
+                                                )}
+                                                <span className="text-foreground">
+                                                    {b.name || b.entity_id}
+                                                </span>
+                                            </span>
+                                        ))}
+                                    </div>
+                                </Section>
+                            )}
+
+                            {row.textual_representation && (
+                                <Section label="Content">
+                                    <pre className="whitespace-pre-wrap break-words text-xs bg-muted/50 rounded p-3 max-h-[40vh] overflow-auto leading-relaxed">
+                                        {row.textual_representation}
+                                    </pre>
+                                </Section>
+                            )}
+
+                            {row.raw_source_fields &&
+                                Object.keys(row.raw_source_fields).length > 0 && (
+                                    <Section label="Raw fields">
+                                        <pre className="whitespace-pre-wrap break-words text-xs bg-muted/50 rounded p-3 max-h-[30vh] overflow-auto leading-relaxed">
+                                            {JSON.stringify(row.raw_source_fields, null, 2)}
+                                        </pre>
+                                    </Section>
+                                )}
+                        </div>
+                    </>
+                )}
+            </SheetContent>
+        </Sheet>
+    );
+}
+
+function DetailRow({
+    label,
+    value,
+    mono,
+}: {
+    label: string;
+    value?: string | null;
+    mono?: boolean;
+}) {
     if (!value) return null;
     return (
-        <div className="flex items-baseline gap-3">
-            <div className="text-xs font-medium text-muted-foreground w-24 shrink-0">{label}</div>
-            <div className="text-sm break-all">{value}</div>
+        <>
+            <div className="text-muted-foreground">{label}</div>
+            <div className={cn("break-all", mono && "font-mono text-[11px]")}>{value}</div>
+        </>
+    );
+}
+
+function Section({ label, children }: { label: string; children: React.ReactNode }) {
+    return (
+        <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">
+                {label}
+            </div>
+            {children}
         </div>
     );
 }
