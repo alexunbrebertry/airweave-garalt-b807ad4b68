@@ -127,6 +127,56 @@ class InternalAgenticSearchRequest(AgenticSearchRequest):
     )
 
 
+class BrowseRequest(BaseModel):
+    """Browse request — paginated tabular listing of a collection (POC, flag-gated).
+
+    No query, no embeddings, no ranking. Uses Vespa's filter_search() under the hood
+    and returns one row per source entity (filtered to chunk_index = 0).
+    """
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"limit": 50, "offset": 0},
+                {
+                    "limit": 50,
+                    "offset": 0,
+                    "sync_ids": ["d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80"],
+                },
+            ]
+        }
+    }
+
+    filter: Optional[list[FilterGroup]] = Field(
+        default=None,
+        description="Filter groups (combined with OR). Same shape as search filters.",
+    )
+    limit: int = Field(default=50, ge=1, le=200, description="Max rows per page.")
+    offset: int = Field(default=0, ge=0, description="Number of rows to skip.")
+
+    sync_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Convenience: limit results to these sync_ids. Translated to a FilterGroup.",
+    )
+    entity_types: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Convenience: limit results to these entity types. Translated to a FilterGroup."
+        ),
+    )
+
+
+class BrowseResponse(BaseModel):
+    """Browse response — page of results plus total count for pagination."""
+
+    results: list[SearchResult] = Field(
+        default_factory=list, description="Rows on this page (one per source entity)."
+    )
+    total: int = Field(..., description="Total entity count matching the filter.")
+    limit: int = Field(..., description="Limit echoed back from the request.")
+    offset: int = Field(..., description="Offset echoed back from the request.")
+
+
 class SearchV2Response(BaseModel):
     """Unified response for all search tiers."""
 
