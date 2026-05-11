@@ -312,8 +312,11 @@ class VespaVectorDB:
         "1.5+ release" can't blow up the regex engine.
         """
         escaped_for_regex = re.escape(substring)
-        # YQL string literals: backslash and single quote need escaping.
-        escaped_for_yql = escaped_for_regex.replace("\\", "\\\\").replace("'", "\\'")
+        # YQL double-quoted string literal: escape backslashes first, then
+        # double quotes (the literal delimiter). `re.escape` does not escape
+        # `"` because it is not a regex metacharacter, so without this an
+        # input like `Quick "test"` would break the YQL parse.
+        escaped_for_yql = escaped_for_regex.replace("\\", "\\\\").replace('"', '\\"')
         return f'name matches "(?i).*{escaped_for_yql}.*"'
 
     def _build_retrieval_clause(

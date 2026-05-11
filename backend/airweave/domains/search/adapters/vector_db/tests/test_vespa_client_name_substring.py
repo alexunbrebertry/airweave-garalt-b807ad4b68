@@ -55,11 +55,28 @@ class TestBuildNameSubstringClause:
         assert clause.startswith('name matches "(?i).*')
         assert clause.endswith('.*"')
 
-    def test_single_quote_escaped(self) -> None:
+    def test_single_quote_not_escaped(self) -> None:
+        """Single quote has no special meaning inside a double-quoted YQL literal."""
         client, _ = _make_client()
         clause = client._build_name_substring_clause("O'Brien")
-        # Single quote in the input must be escaped for the YQL string literal.
-        assert "O\\'Brien" in clause
+        assert "O'Brien" in clause
+
+    def test_double_quote_escaped(self) -> None:
+        """Double quote must be escaped — it is the literal delimiter in our YQL."""
+        client, _ = _make_client()
+        clause = client._build_name_substring_clause('"hi"')
+        # Each `"` in the input becomes `\"` in the YQL string literal.
+        # Strip the surrounding `name matches "(?i).*` ... `.*"` wrapper and
+        # check the inner escaped payload starts and ends with `\"`.
+        assert clause.startswith('name matches "(?i).*\\"')
+        assert clause.endswith('\\".*"')
+        # And the YQL literal has exactly one opening + one closing `"` that
+        # are not preceded by a backslash (i.e. exactly two unescaped quotes).
+        unescaped = 0
+        for i, ch in enumerate(clause):
+            if ch == '"' and (i == 0 or clause[i - 1] != "\\"):
+                unescaped += 1
+        assert unescaped == 2
 
 
 class TestCountWithNameSubstring:
@@ -86,9 +103,7 @@ class TestCountWithNameSubstring:
     @pytest.mark.asyncio
     async def test_clause_absent_when_name_substring_empty_string(self) -> None:
         client, app = _make_client()
-        await client.count(
-            filter_groups=[], collection_id="col-123", name_substring=""
-        )
+        await client.count(filter_groups=[], collection_id="col-123", name_substring="")
         yql = app.query.call_args.kwargs["body"]["yql"]
         assert "name matches" not in yql
 

@@ -83,7 +83,7 @@ async def instant_search(
 
 
 @router.post(
-    "/{readable_id}/browse",
+    "/{readable_id}/search/browse",
     response_model=BrowseResponse,
     summary="Browse Collection",
     description=(

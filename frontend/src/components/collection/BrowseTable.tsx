@@ -214,7 +214,7 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
             try {
                 const body = buildBrowseBody(PAGE_SIZE, offset, selectedSyncId, debouncedSearch);
                 const response = await apiClient.post(
-                    `/collections/${collectionReadableId}/browse`,
+                    `/collections/${collectionReadableId}/search/browse`,
                     body,
                     { signal: controller.signal },
                 );
@@ -262,7 +262,7 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
         const cap = Math.min(total, EXPORT_MAX_ROWS);
         const body = buildBrowseBody(cap, 0, selectedSyncId, debouncedSearch);
         const response = await apiClient.post(
-            `/collections/${collectionReadableId}/browse`,
+            `/collections/${collectionReadableId}/search/browse`,
             body,
         );
         if (!response.ok) {
