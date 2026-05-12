@@ -108,6 +108,10 @@ interface BrowseTableProps {
 const PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 250;
 const EXPORT_MAX_ROWS = 1000;
+// Backend caps `limit` at 200 (BrowseRequest in search_v2.py).
+const EXPORT_PAGE_SIZE = 200;
+// Backend requires `name_query` length >= 2 to avoid full-scan triggers on a single char.
+const NAME_QUERY_MIN_LENGTH = 2;
 
 const ALL_SOURCES_VALUE = "__all__";
 
@@ -129,7 +133,7 @@ const buildBrowseBody = (
         body.sync_ids = [selectedSyncId];
     }
     const trimmed = nameQuery.trim();
-    if (trimmed) {
+    if (trimmed.length >= NAME_QUERY_MIN_LENGTH) {
         body.name_query = trimmed;
     }
     return body;
@@ -254,23 +258,44 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
     const canNext = offset + PAGE_SIZE < total;
 
     const filteringApplied =
-        selectedSyncId !== ALL_SOURCES_VALUE || debouncedSearch.trim().length > 0;
+        selectedSyncId !== ALL_SOURCES_VALUE ||
+        debouncedSearch.trim().length >= NAME_QUERY_MIN_LENGTH;
+
+    const searchTrimmedLength = searchInput.trim().length;
+    const searchTooShort =
+        searchTrimmedLength > 0 && searchTrimmedLength < NAME_QUERY_MIN_LENGTH;
 
     // ===== Export =====
 
     const fetchAllForExport = useCallback(async (): Promise<BrowseRow[]> => {
+        // Backend caps a single page at 200, so loop in chunks until we hit the export cap.
         const cap = Math.min(total, EXPORT_MAX_ROWS);
-        const body = buildBrowseBody(cap, 0, selectedSyncId, debouncedSearch);
-        const response = await apiClient.post(
-            `/collections/${collectionReadableId}/search/browse`,
-            body,
-        );
-        if (!response.ok) {
-            const text = await response.text();
-            throw new Error(text || `Export failed (${response.status})`);
+        const accumulated: BrowseRow[] = [];
+        let pageOffset = 0;
+        while (accumulated.length < cap) {
+            const remaining = cap - accumulated.length;
+            const pageLimit = Math.min(EXPORT_PAGE_SIZE, remaining);
+            const body = buildBrowseBody(
+                pageLimit,
+                pageOffset,
+                selectedSyncId,
+                debouncedSearch,
+            );
+            const response = await apiClient.post(
+                `/collections/${collectionReadableId}/search/browse`,
+                body,
+            );
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Export failed (${response.status})`);
+            }
+            const data: BrowseResponse = await response.json();
+            if (data.results.length === 0) break;
+            accumulated.push(...data.results);
+            pageOffset += data.results.length;
+            if (data.results.length < pageLimit) break;
         }
-        const data: BrowseResponse = await response.json();
-        return data.results;
+        return accumulated;
     }, [collectionReadableId, selectedSyncId, debouncedSearch, total]);
 
     const runExport = useCallback(
@@ -314,6 +339,7 @@ export function BrowseTable({ collectionReadableId, sourceConnections }: BrowseT
                         value={searchInput}
                         onChange={setSearchInput}
                         isPending={searchInput !== debouncedSearch || (isLoading && !!debouncedSearch)}
+                        hint={searchTooShort ? "Type at least 2 characters" : null}
                     />
                     <Select value={selectedSyncId} onValueChange={setSelectedSyncId}>
                         <SelectTrigger className="h-9 w-[200px] shrink-0">
@@ -542,10 +568,12 @@ function SearchInput({
     value,
     onChange,
     isPending,
+    hint,
 }: {
     value: string;
     onChange: (v: string) => void;
     isPending: boolean;
+    hint?: string | null;
 }) {
     const ref = useRef<HTMLInputElement>(null);
     return (
@@ -573,6 +601,11 @@ function SearchInput({
                 >
                     <X className="h-3 w-3" />
                 </button>
+            )}
+            {hint && (
+                <div className="absolute left-0 top-full mt-1 text-[11px] text-muted-foreground">
+                    {hint}
+                </div>
             )}
         </div>
     );

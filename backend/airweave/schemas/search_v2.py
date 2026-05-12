@@ -157,20 +157,24 @@ class BrowseRequest(BaseModel):
     sync_ids: Optional[list[str]] = Field(
         default=None,
         description="Convenience: limit results to these sync_ids. Translated to a FilterGroup.",
+        max_length=100,
     )
     entity_types: Optional[list[str]] = Field(
         default=None,
         description=(
             "Convenience: limit results to these entity types. Translated to a FilterGroup."
         ),
+        max_length=100,
     )
     name_query: Optional[str] = Field(
         default=None,
         description=(
             "Case-insensitive substring search against the entity name. Bypasses the "
             "FilterCondition `contains` operator (which is token-match in Vespa) and "
-            "translates to a regex `matches` clause."
+            "translates to a regex `matches` clause. Min length 2 to prevent full-scan "
+            "triggers from a single character."
         ),
+        min_length=2,
         max_length=200,
     )
 

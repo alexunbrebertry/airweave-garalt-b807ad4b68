@@ -8,17 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from airweave.api.context import ApiContext
 from airweave.domains.search.protocols import BrowseServiceProtocol
+from airweave.schemas.search_v2 import BrowseResponse
 
 if TYPE_CHECKING:
-    from airweave.schemas.search_v2 import BrowseRequest, BrowseResponse
+    from airweave.schemas.search_v2 import BrowseRequest
 
 
 class FakeBrowseService(BrowseServiceProtocol):
     """Returns a seeded BrowseResponse. Records calls."""
 
     def __init__(self) -> None:
-        from airweave.schemas.search_v2 import BrowseResponse
-
         self._response: BrowseResponse = BrowseResponse(results=[], total=0, limit=50, offset=0)
         self._calls: list[tuple] = []
 

@@ -109,9 +109,7 @@ class TestBrowseService:
         svc, vector_db, repo = _make_service()
         repo.seed_readable(DEFAULT_READABLE_ID, _make_collection())
 
-        await svc.browse(
-            AsyncMock(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest()
-        )
+        await svc.browse(AsyncMock(), _make_ctx(), DEFAULT_READABLE_ID, BrowseRequest())
 
         filter_call = next(c for c in vector_db._calls if c[0] == "filter_search")
         filter_groups = filter_call[1]
@@ -199,12 +197,10 @@ class TestBrowseService:
         assert len(filter_groups) == 2
         for group in filter_groups:
             anchor_present = any(
-                c.field == FilterableField.SYSTEM_METADATA_CHUNK_INDEX
-                for c in group.conditions
+                c.field == FilterableField.SYSTEM_METADATA_CHUNK_INDEX for c in group.conditions
             )
             source_present = any(
-                c.field == FilterableField.SYSTEM_METADATA_SOURCE_NAME
-                for c in group.conditions
+                c.field == FilterableField.SYSTEM_METADATA_SOURCE_NAME for c in group.conditions
             )
             assert anchor_present and source_present
 
@@ -241,3 +237,17 @@ class TestBrowseService:
 
         filter_call = next(c for c in vector_db._calls if c[0] == "filter_search")
         assert filter_call[5] is None
+
+    def test_name_query_rejects_single_character(self) -> None:
+        """Single-character `name_query` is rejected to avoid full-scan triggers."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            BrowseRequest(name_query="a")
+
+    def test_sync_ids_rejects_oversized_list(self) -> None:
+        """`sync_ids` is capped at 100 entries."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            BrowseRequest(sync_ids=[str(uuid4()) for _ in range(101)])

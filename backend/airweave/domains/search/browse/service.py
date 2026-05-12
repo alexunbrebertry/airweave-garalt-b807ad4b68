@@ -23,9 +23,10 @@ from airweave.domains.search.types.filters import (
     FilterGroup,
     FilterOperator,
 )
+from airweave.schemas.search_v2 import BrowseResponse
 
 if TYPE_CHECKING:
-    from airweave.schemas.search_v2 import BrowseRequest, BrowseResponse
+    from airweave.schemas.search_v2 import BrowseRequest
 
 
 class BrowseService(BrowseServiceProtocol):
@@ -48,8 +49,6 @@ class BrowseService(BrowseServiceProtocol):
         request: BrowseRequest,
     ) -> BrowseResponse:
         """Run a paginated unranked listing for the given collection."""
-        from airweave.schemas.search_v2 import BrowseResponse
-
         start = time.monotonic()
         ctx.logger.info(
             f"Browse started collection={readable_id} limit={request.limit} offset={request.offset}"
