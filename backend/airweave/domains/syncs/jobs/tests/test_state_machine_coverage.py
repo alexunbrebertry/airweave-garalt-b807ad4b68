@@ -6,6 +6,7 @@ from uuid import UUID
 import pytest
 
 from airweave.adapters.event_bus.fake import FakeEventBus
+from airweave.core.events.sync import SyncLifecycleEvent
 from airweave.core.shared_models import SourceConnectionErrorCategory, SyncJobStatus
 from airweave.domains.syncs.jobs.state_machine import SyncJobStateMachine
 from airweave.domains.syncs.jobs.types import LifecycleData
@@ -95,6 +96,7 @@ async def test_publish_lifecycle_event_failed_with_error_category():
 
     assert len(event_bus.events) == 1
     event = event_bus.events[0]
+    assert isinstance(event, SyncLifecycleEvent)
     assert event.error == "JWT expired"
     assert event.error_category == "oauth_credentials_expired"
 
@@ -112,6 +114,7 @@ async def test_publish_lifecycle_event_failed_without_category_omits_field():
 
     assert len(event_bus.events) == 1
     event = event_bus.events[0]
+    assert isinstance(event, SyncLifecycleEvent)
     assert event.error_category is None
 
 
@@ -135,6 +138,7 @@ async def test_publish_lifecycle_event_completed_ignores_category():
 
     assert len(event_bus.events) == 1
     event = event_bus.events[0]
+    assert isinstance(event, SyncLifecycleEvent)
     # error_category exists on the event class but is None for non-failed payloads
     assert event.error_category is None
 
@@ -173,7 +177,9 @@ async def test_transition_failed_publishes_lifecycle_event_with_error_category()
         )
 
     assert len(event_bus.events) == 1
-    assert event_bus.events[0].error_category == "usage_limit_exceeded"
+    event = event_bus.events[0]
+    assert isinstance(event, SyncLifecycleEvent)
+    assert event.error_category == "usage_limit_exceeded"
 
 
 @pytest.mark.asyncio
