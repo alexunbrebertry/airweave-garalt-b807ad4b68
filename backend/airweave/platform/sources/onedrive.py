@@ -307,17 +307,20 @@ class OneDriveSource(BaseSource):
         file_count = 0
         label_filter = self._get_label_filter()
         async for item in self._list_all_drive_items_recursively(drive_id):
+            if "folder" in item:
+                continue
+
+            # Run the label check outside the per-item try so that errors
+            # configured to fail loud (skip_encrypted_files=False) propagate
+            # instead of being swallowed by the broad exception handler below.
+            if label_filter is not None and await label_filter.should_skip_item(
+                drive_id=drive_id,
+                item_id=item["id"],
+                item_name=item.get("name", ""),
+            ):
+                continue
+
             try:
-                if "folder" in item:
-                    continue
-
-                if label_filter is not None and await label_filter.should_skip_item(
-                    drive_id=drive_id,
-                    item_id=item["id"],
-                    item_name=item.get("name", ""),
-                ):
-                    continue
-
                 download_url = self._get_download_url(drive_id, item["id"])
 
                 file_entity = OneDriveDriveItemEntity.from_api(
