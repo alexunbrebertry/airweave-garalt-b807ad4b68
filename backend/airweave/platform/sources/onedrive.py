@@ -100,7 +100,7 @@ class OneDriveSource(BaseSource):
             skip_encrypted=self._skip_encrypted_files,
             skip_unlabeled=self._skip_unlabeled_files,
             http_client=self.http_client,
-            token_provider=self.auth.get_token,
+            token_provider=self.get_access_token,
             logger=self.logger,
         )
         return self._label_filter

@@ -686,9 +686,9 @@ class SharePointOnlineBase(BaseSource):
         for drive in drives:
             owner = drive.get("owner") or {}
             group = owner.get("group") if isinstance(owner, dict) else None
-            group_id = group.get("id") if isinstance(group, dict) else None
-            if group_id:
-                return group_id
+            raw_id = group.get("id") if isinstance(group, dict) else None
+            if isinstance(raw_id, str) and raw_id:
+                return raw_id
         return None
 
     async def _full_sync(  # noqa: C901

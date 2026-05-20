@@ -118,7 +118,7 @@ class SharePointSource(BaseSource):
             skip_encrypted=self._skip_encrypted_files,
             skip_unlabeled=self._skip_unlabeled_files,
             http_client=self.http_client,
-            token_provider=self.auth.get_token,
+            token_provider=self.get_access_token,
             logger=self.logger,
         )
         return self._label_filter
@@ -129,9 +129,9 @@ class SharePointSource(BaseSource):
         for drive in drives:
             owner = drive.get("owner") or {}
             group = owner.get("group") if isinstance(owner, dict) else None
-            group_id = group.get("id") if isinstance(group, dict) else None
-            if group_id:
-                return group_id
+            raw_id = group.get("id") if isinstance(group, dict) else None
+            if isinstance(raw_id, str) and raw_id:
+                return raw_id
         return None
 
     # ------------------------------------------------------------------
