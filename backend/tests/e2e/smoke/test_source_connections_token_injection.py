@@ -91,6 +91,8 @@ async def fresh_notion_token(config) -> str:
     if not config.TEST_COMPOSIO_NOTION_ACCOUNT_ID_1:
         pytest.skip("TEST_COMPOSIO_NOTION_ACCOUNT_ID_1 not configured")
 
+    token = ""
+    token_valid = False
     try:
         token = await fetch_fresh_token_from_composio(
             api_key=config.TEST_COMPOSIO_API_KEY,
