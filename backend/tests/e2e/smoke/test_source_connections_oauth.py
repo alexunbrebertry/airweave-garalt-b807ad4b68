@@ -101,10 +101,11 @@ async def fresh_notion_token(config) -> str:
             account_id=config.TEST_COMPOSIO_NOTION_ACCOUNT_ID_1,
             source_slug="notion",
         )
+        token_valid = await _validate_notion_token(token)
     except (httpx.HTTPError, ValueError) as exc:
         pytest.skip(f"Could not fetch Notion token from Composio: {exc}")
 
-    if not await _validate_notion_token(token):
+    if not token_valid:
         pytest.skip("Notion test account access token is revoked or invalid")
 
     return token
